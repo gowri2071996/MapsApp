@@ -1,5 +1,6 @@
 package com.example.mapsapp;
 
+import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
@@ -8,11 +9,23 @@ import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.AlertDialog;
 import android.content.DialogInterface;
+import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.location.Address;
+import android.location.Geocoder;
 import android.location.Location;
-import android.location.LocationListener;
+
+import com.example.mapsapp.Database.DBHandler;
+import com.example.mapsapp.Model.PlaceModel;
+import com.google.android.gms.common.api.Status;
+import com.google.android.gms.location.LocationListener;
+
 import android.os.Build;
 import android.os.Bundle;
+import android.util.Log;
+import android.view.View;
+import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.Toast;
 
 import com.google.android.gms.common.ConnectionResult;
@@ -27,6 +40,15 @@ import com.google.android.gms.maps.model.BitmapDescriptorFactory;
 import com.google.android.gms.maps.model.LatLng;
 import com.google.android.gms.maps.model.Marker;
 import com.google.android.gms.maps.model.MarkerOptions;
+import com.google.android.libraries.places.api.Places;
+import com.google.android.libraries.places.api.model.Place;
+import com.google.android.libraries.places.widget.Autocomplete;
+import com.google.android.libraries.places.widget.AutocompleteActivity;
+import com.google.android.libraries.places.widget.model.AutocompleteActivityMode;
+
+import java.io.IOException;
+import java.util.List;
+import java.util.Locale;
 
 public class MainActivity extends AppCompatActivity
         implements OnMapReadyCallback,
@@ -36,21 +58,55 @@ public class MainActivity extends AppCompatActivity
 
     GoogleMap mGoogleMap;
     SupportMapFragment mapFrag;
+    public LocationRequest mLocationRequest;
     GoogleApiClient mGoogleApiClient;
     Location mLastLocation;
     Marker mCurrLocationMarker;
-    private LocationRequest mLocationRequest;
+    EditText etAutoCom;
+    //    private String mapKey = "AIzaSyDN3WssDMNs4qNdWQeUcIrSBg7Bco6TXj0vv";
+    private String mapKey = "AIzaSyDcuv15pOnI_uRQIn2qpTgi-SsG3tyev_A";
+    private PlacesFieldSelector fieldSelector;
+    private int requestCodeVal = 5;
+    ImageView ivSubmit;
+    DBHandler db;
+    private int placeId;
+    private String placeName;
+    private String placeAddress;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-
-        getSupportActionBar().setTitle("Map Location Activity");
-
+        etAutoCom = (EditText) findViewById(R.id.etAutoCom);
+        ivSubmit = (ImageView) findViewById(R.id.ivSubmit);
+        db = new DBHandler(this);
         mapFrag = (SupportMapFragment) getSupportFragmentManager().findFragmentById(R.id.map);
-        mapFrag.getMapAsync(this);
+        mapFrag.getMapAsync(MainActivity.this);
+        if (!Places.isInitialized()) {
+            Places.initialize(getApplicationContext(), mapKey);
+        }
+        fieldSelector = new PlacesFieldSelector();
+        ivSubmit.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+
+                Log.d("MainActivity", "Inserting ..");
+                db.addAddress(new PlaceModel(/*placeId*/99, placeName, placeAddress));
+                Intent intent = new Intent(MainActivity.this, AddressList.class);
+                startActivity(intent);
+            }
+        });
+        etAutoCom.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                Intent autocompleteIntent = new Autocomplete.IntentBuilder(AutocompleteActivityMode.FULLSCREEN, fieldSelector.getAllFields())
+                        .build(MainActivity.this);
+                startActivityForResult(autocompleteIntent, requestCodeVal
+                );
+            }
+        });
     }
+
 
     @Override
     public void onPause() {
@@ -58,14 +114,14 @@ public class MainActivity extends AppCompatActivity
 
         //stop location updates when Activity is no longer active
         if (mGoogleApiClient != null) {
-            LocationServices.FusedLocationApi.removeLocationUpdates(mGoogleApiClient, (com.google.android.gms.location.LocationListener) this);
+            LocationServices.FusedLocationApi.removeLocationUpdates(mGoogleApiClient, this);
         }
     }
 
     @Override
     public void onMapReady(GoogleMap googleMap) {
         mGoogleMap = googleMap;
-        mGoogleMap.setMapType(GoogleMap.MAP_TYPE_HYBRID);
+        mGoogleMap.setMapType(GoogleMap.MAP_TYPE_NORMAL);
 
         //Initialize Google Play Services
         if (android.os.Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -94,17 +150,17 @@ public class MainActivity extends AppCompatActivity
         mGoogleApiClient.connect();
     }
 
-    @SuppressLint("RestrictedApi")
     @Override
     public void onConnected(Bundle bundle) {
-        mLocationRequest = new LocationRequest();
-        mLocationRequest.setInterval(1000);
-        mLocationRequest.setFastestInterval(1000);
+        mLocationRequest = LocationRequest.create();
+        mLocationRequest.setInterval(500);
+        mLocationRequest.setFastestInterval(500);
         mLocationRequest.setPriority(LocationRequest.PRIORITY_BALANCED_POWER_ACCURACY);
         if (ContextCompat.checkSelfPermission(this,
                 Manifest.permission.ACCESS_FINE_LOCATION)
                 == PackageManager.PERMISSION_GRANTED) {
-            LocationServices.FusedLocationApi.requestLocationUpdates(mGoogleApiClient, mLocationRequest, (com.google.android.gms.location.LocationListener) this);
+            LocationServices.FusedLocationApi.requestLocationUpdates(mGoogleApiClient, mLocationRequest, this);
+
         }
     }
 
@@ -128,11 +184,32 @@ public class MainActivity extends AppCompatActivity
         MarkerOptions markerOptions = new MarkerOptions();
         markerOptions.position(latLng);
         markerOptions.title("Current Position");
-        markerOptions.icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_MAGENTA));
+        markerOptions.icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_ORANGE));
         mCurrLocationMarker = mGoogleMap.addMarker(markerOptions);
 
+        Geocoder geoCoder = new Geocoder(this, Locale.getDefault()); // Geocoder
+        StringBuilder builder = new StringBuilder();
+        try {
+            List<Address> address = geoCoder.getFromLocation(location.getLatitude(), location.getLongitude(), 1);
+            int maxLines = address.get(0).getMaxAddressLineIndex();
+//            for (int i = 0; i < maxLines; i++) {
+//                String addressStr = address.get(0).getAddressLine(i);
+//                builder.append(addressStr);
+//                builder.append(" ");
+//            }
+            if (address.get(0).getAdminArea() != null && address.get(0).getCountryName() != null) {
+                placeName = !address.get(0).getAdminArea().equals("") ? address.get(0).getAdminArea() : "Area";
+                placeId = address.size() != 0 ? address.size() : 3699;
+                placeAddress = !address.get(0).getCountryName().equals("") ? address.get(0).getCountryName() : "Country";
+            }
+
+        } catch (IOException e) {
+
+        } catch (NullPointerException e) {
+        }
         //move map camera
         mGoogleMap.moveCamera(CameraUpdateFactory.newLatLngZoom(latLng, 11));
+
 
     }
 
@@ -141,14 +218,9 @@ public class MainActivity extends AppCompatActivity
     private void checkLocationPermission() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
                 != PackageManager.PERMISSION_GRANTED) {
-
-            // Should we show an explanation?
             if (ActivityCompat.shouldShowRequestPermissionRationale(this,
                     Manifest.permission.ACCESS_FINE_LOCATION)) {
 
-                // Show an explanation to the user *asynchronously* -- don't block
-                // this thread waiting for the user's response! After the user
-                // sees the explanation, try again to request the permission.
                 new AlertDialog.Builder(this)
                         .setTitle("Location Permission Needed")
                         .setMessage("This app needs the Location permission, please accept to use location functionality")
@@ -175,8 +247,7 @@ public class MainActivity extends AppCompatActivity
     }
 
     @Override
-    public void onRequestPermissionsResult(int requestCode,
-                                           String permissions[], int[] grantResults) {
+    public void onRequestPermissionsResult(int requestCode, String permissions[], int[] grantResults) {
         switch (requestCode) {
             case MY_PERMISSIONS_REQUEST_LOCATION: {
                 // If request is cancelled, the result arrays are empty.
@@ -194,18 +265,32 @@ public class MainActivity extends AppCompatActivity
                         }
                         mGoogleMap.setMyLocationEnabled(true);
                     }
-
                 } else {
-
                     // permission denied, boo! Disable the
                     // functionality that depends on this permission.
                     Toast.makeText(this, "permission denied", Toast.LENGTH_LONG).show();
                 }
                 return;
             }
-
-            // other 'case' lines to check for other
-            // permissions this app might request
         }
+    }
+
+    @Override
+    public void onActivityResult(int requestCode, int resultCode, @Nullable Intent intent) {
+        if (requestCode == requestCodeVal) {
+            if (resultCode == AutocompleteActivity.RESULT_OK) {
+                Place place = Autocomplete.getPlaceFromIntent(intent);
+                placeId = Integer.parseInt(place.getId());
+                placeName = place.getName();
+                placeAddress = place.getAddress();
+            } else if (resultCode == AutocompleteActivity.RESULT_ERROR) {
+                Status status = Autocomplete.getStatusFromIntent(intent);
+            } else if (resultCode == AutocompleteActivity.RESULT_CANCELED) {
+                // The user canceled the operation.
+            }
+        } else {
+
+        }
+        super.onActivityResult(requestCode, resultCode, intent);
     }
 }
